@@ -39,3 +39,7 @@ packages = ["django_fastresolve"]
 testpaths = ["tests"]
 addopts = "--strict-markers -r fEsxXw"
 DJANGO_SETTINGS_MODULE = "tests.settings"
+
+[tool.mutmut]
+source_paths = ["django_fastresolve/"]
+also_copy = ["tests/"]

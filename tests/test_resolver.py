@@ -1,5 +1,6 @@
 import random
 import re
+from types import SimpleNamespace
 
 import pytest
 from django.test import override_settings
@@ -9,13 +10,20 @@ from django.urls import (
     get_resolver,
     path,
 )
-from django.urls.resolvers import URLResolver
+from django.urls.resolvers import (
+    RegexPattern,
+    URLResolver,
+)
 from django.utils import translation
 
 from django_fastresolve import stock_resolving
 from django_fastresolve.resolver import (
     fast_resolve,
+    install,
+    literal_prefix,
     regex_literal_prefix,
+    stock_resolve,
+    uninstall,
 )
 from tests import urls
 from tests.urls import make_view
@@ -81,6 +89,7 @@ FIXED_PATHS = [
     '/case/',
     '/CASE/',
     '/re-include/detail/1/',
+    '/re-pos-include/7/re/12/',
     '/translated/',
     '/nope/',
     '/something/weird/',
@@ -254,3 +263,96 @@ def test_tried_on_404_without_debug_only_has_candidates():
 )
 def test_regex_literal_prefix(regex, expected):
     assert regex_literal_prefix(regex) == expected
+
+
+@pytest.mark.parametrize(
+    'regex, expected',
+    [
+        (r'^esc\.', 'esc.'),
+        ('^a\\', 'a'),
+    ],
+)
+def test_regex_literal_prefix_escape_at_end(regex, expected):
+    assert regex_literal_prefix(regex) == expected
+
+
+@pytest.mark.parametrize(
+    'route, expected',
+    [
+        ('literal/', 'literal/'),
+        ('a<int:x>/', 'a'),
+        ('foo/<int:x>/', 'foo/'),
+        ('<int:x>/', ''),
+    ],
+)
+def test_literal_prefix_of_route(route, expected):
+    assert literal_prefix(path(route, make_view('v'))) == expected
+
+
+def is_subsequence(needle, haystack):
+    it = iter(haystack)
+    return all(any(x == y for y in it) for x in needle)
+
+
+def tried_routes(tried):
+    return [[str(p.pattern) for p in entry] for entry in tried]
+
+
+@pytest.mark.parametrize('path_to_resolve', ['/nested/nope/', '/deep/a/b/x/', '/ns2/5/nope/'])
+def test_tried_on_404_is_a_subsequence_of_stock(path_to_resolve):
+    with pytest.raises(Resolver404) as fast_404:
+        fast(path_to_resolve)
+    with pytest.raises(Resolver404) as stock_404:
+        stock(path_to_resolve)
+    fast_tried = tried_routes(fast_404.value.args[0]['tried'])
+    assert any(len(entry) > 1 for entry in fast_tried)
+    assert is_subsequence(fast_tried, tried_routes(stock_404.value.args[0]['tried']))
+
+
+@pytest.mark.parametrize('path_to_resolve', ['/literal/', '/nested/detail/3/', '/deep/a/b/4/', '/even/5/'])
+def test_tried_on_match_is_a_subsequence_of_stock(path_to_resolve):
+    fast_tried = tried_routes(fast(path_to_resolve).tried)
+    stock_tried = tried_routes(stock(path_to_resolve).tried)
+    assert fast_tried[-1] == stock_tried[-1]
+    assert is_subsequence(fast_tried, stock_tried)
+
+
+def test_index_is_reused_and_rebuilt_when_patterns_are_replaced():
+    resolver = get_resolver()
+    fast('/literal/')
+    index = resolver._fastresolve_index
+    fast('/literal/')
+    assert resolver._fastresolve_index is index
+
+    resolver.url_patterns = [*resolver.url_patterns[:-1], path('replaced/', make_view('replaced'))]
+    try:
+        assert fast('/replaced/').func.__name__ == 'replaced'
+        assert resolver._fastresolve_index is not index
+    finally:
+        clear_url_caches()
+
+
+class PatternSequence:
+    """url patterns that are iterable, but neither a list nor a tuple."""
+
+    def __init__(self, patterns):
+        self.patterns = patterns
+
+    def __iter__(self):
+        return iter(self.patterns)
+
+
+def test_patterns_that_are_not_a_list_fall_back_to_stock():
+    resolver = URLResolver(RegexPattern(r'^/'), SimpleNamespace(urlpatterns=PatternSequence([path('x/', make_view('x'))])))
+    assert resolver.resolve('/x/').func.__name__ == 'x'
+    with pytest.raises(Resolver404):
+        resolver.resolve('/y/')
+
+
+def test_uninstall_and_install():
+    uninstall()
+    try:
+        assert URLResolver.resolve is stock_resolve
+    finally:
+        install()
+    assert URLResolver.resolve is fast_resolve

@@ -85,6 +85,8 @@ urlpatterns = [
     re_path(r'^any.char/$', make_view('re_dot')),
     re_path(r'(?i)^case/$', make_view('re_case_insensitive')),
     re_path(r'^re-include/', include(inner)),
+    # Positional args from the include and the leaf are concatenated
+    re_path(r'^re-pos-include/([0-9]+)/', include(inner)),
     path(gettext_lazy('translated/'), make_view('translated')),
     MatchesEverythingEndingInWeird(RoutePattern('nope/', is_endpoint=True), make_view('weird')),
     re_path(r'^', include([path('catchall-child/', make_view('catchall_child'))])),
